@@ -1,0 +1,229 @@
+name: (Procedure) Release
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "yes" to confirm'
+        required: true
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  build_dummy_wheel:
+    if: ${{ github.event.inputs.confirm == 'yes' }}
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: webfactory/ssh-agent@v0.6.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.VKIT_COLLECT_USAGE_INFORMATION_DEPLOY_KEY }}
+      - name: Clone repo.
+        run: |
+          git clone git@github.com:vkit-x/vkit-collect-usage-information.git
+      - name: Clear content.
+        run: |
+          echo '' > vkit_collect_usage_information/__init__.py
+        working-directory: vkit-collect-usage-information
+      - name: Build wheel.
+        run: |
+          python -m pip install -U pip
+          python -m pip install build 'setuptools>=42' wheel
+          python setup.py clean --all
+          python -m build --no-isolation --wheel
+        working-directory: vkit-collect-usage-information
+      - name: Get wheel path.
+        run: |
+          WHEEL_PATH=$(python get_wheel_path.py dist)
+          echo "WHEEL_PATH=${WHEEL_PATH}" >> $GITHUB_ENV
+        working-directory: vkit-collect-usage-information
+      - uses: actions/upload-artifact@v3
+        with:
+          name: wheel
+          path: ${{ env.WHEEL_PATH }}
+  build_wheel_on_macos_and_windows:
+    if: ${{ github.event.inputs.confirm == 'yes' }}
+    strategy:
+      matrix:
+        os:
+          - "macos-11"
+          - "windows-2019"
+        python_version:
+          - "3.8"
+          - "3.9"
+          - "3.10"
+    name: Build wheel on ${{ matrix.os }} with Python ${{ matrix.python_version }}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: webfactory/ssh-agent@v0.6.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.VKIT_COLLECT_USAGE_INFORMATION_DEPLOY_KEY }}
+      - name: Clone repo.
+        run: |
+          git clone git@github.com:vkit-x/vkit-collect-usage-information.git
+      - uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python_version }}
+      - name: Build wheel.
+        run: |
+          python -m pip install -U pip
+          python -m pip install build 'setuptools>=42' wheel
+          python setup.py clean --all
+          python -m build --no-isolation --wheel
+        working-directory: vkit-collect-usage-information
+      - name: Get wheel path. (macos)
+        if: ${{ matrix.os == 'macos-11' }}
+        run: |
+          WHEEL_PATH=$(python get_wheel_path.py dist)
+          echo "WHEEL_PATH=${WHEEL_PATH}" >> $GITHUB_ENV
+        working-directory: vkit-collect-usage-information
+      - name: Get wheel path. (windows)
+        if: ${{ matrix.os == 'windows-2019' }}
+        run: |
+          $WHEEL_PATH = (python get_wheel_path.py dist 2>&1).ToString()
+          echo "WHEEL_PATH=${WHEEL_PATH}" >> $env:GITHUB_ENV
+        working-directory: vkit-collect-usage-information
+      - name: Set platform tag. (macos)
+        if: ${{ matrix.os == 'macos-11' }}
+        run: |
+          echo "PLATFORM_TAG=macosx_10_9_x86_64" >> $GITHUB_ENV
+      - name: Set platform tag. (windows)
+        if: ${{ matrix.os == 'windows-2019' }}
+        run: |
+          echo "PLATFORM_TAG=None" >> $env:GITHUB_ENV
+      - name: Apply pywhlobf.
+        run: |
+          # New wheel version breaks.
+          python -m pip uninstall -y wheel
+          python -m pip install wheel==0.37.1
+          # https://github.com/cython/cython/issues/4371
+          python -m pip install pywhlobf[cython3]>=0.2.8
+          pywhlobf ${{ env.WHEEL_PATH }} pywhlobf_dist --platform_tag=${{ env.PLATFORM_TAG }}
+        working-directory: vkit-collect-usage-information
+      - name: Get pywhlobf wheel path. (macos)
+        if: ${{ matrix.os == 'macos-11' }}
+        run: |
+          PYWHLOBF_WHEEL_PATH=$(python get_wheel_path.py pywhlobf_dist)
+          echo "PYWHLOBF_WHEEL_PATH=${PYWHLOBF_WHEEL_PATH}" >> $GITHUB_ENV
+        working-directory: vkit-collect-usage-information
+      - name: Get pywhlobf wheel path. (windows)
+        if: ${{ matrix.os == 'windows-2019' }}
+        run: |
+          $PYWHLOBF_WHEEL_PATH = (python get_wheel_path.py pywhlobf_dist 2>&1).ToString()
+          echo "PYWHLOBF_WHEEL_PATH=${PYWHLOBF_WHEEL_PATH}" >> $env:GITHUB_ENV
+        working-directory: vkit-collect-usage-information
+      - name: Test wheel.
+        run: |
+          python -m pip uninstall -y vkit-collect-usage-information
+          python -m pip install ${{ env.PYWHLOBF_WHEEL_PATH }}
+          python -c 'import vkit_collect_usage_information'
+        env:
+          LOGGING_LEVEL: DEBUG
+          VKIT_COLLECT_USAGE_INFORMATION_MODE: github_release_test
+      - uses: actions/upload-artifact@v3
+        with:
+          name: wheel
+          path: ${{ env.PYWHLOBF_WHEEL_PATH }}
+  build_wheel_on_linux:
+    if: ${{ github.event.inputs.confirm == 'yes' }}
+    strategy:
+      matrix:
+        platform_tag:
+          - "manylinux2014_x86_64"
+          - "manylinux_2_24_x86_64"
+        python_abi:
+          - "cp38-cp38"
+          - "cp39-cp39"
+          - "cp310-cp310"
+        exclude:
+          - platform_tag: "manylinux2014_x86_64"
+            python_abi: "cp310-cp310"
+    container:
+      image: quay.io/pypa/${{ matrix.platform_tag }}
+    name: Build wheel on ${{ matrix.platform_tag }} with Python ${{ matrix.python_abi }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install openssh-client (centos).
+        run: |
+          yum -y install openssh-clients
+        if: ${{ startsWith(matrix.platform_tag, 'manylinux2014') }}
+      - name: Install openssh-client (debian).
+        run: |
+          apt-get update
+          apt-get install -y openssh-client
+        if: ${{ startsWith(matrix.platform_tag, 'manylinux_2_24') }}
+      - uses: webfactory/ssh-agent@v0.6.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.VKIT_COLLECT_USAGE_INFORMATION_DEPLOY_KEY }}
+      - name: Clone repo.
+        run: |
+          git clone git@github.com:vkit-x/vkit-collect-usage-information.git
+      - name: Setup python/pip.
+        run: |
+          update-alternatives --install /usr/bin/python python /opt/python/${{ matrix.python_abi }}/bin/python 0
+          python --version
+
+          update-alternatives --install /usr/bin/pip pip /opt/python/${{ matrix.python_abi }}/bin/pip 0
+          pip install -U pip
+          pip --version
+      - name: Build wheel.
+        run: |
+          python -m pip install build 'setuptools>=42' wheel
+          python setup.py clean --all
+          python -m build --no-isolation --wheel
+        working-directory: vkit-collect-usage-information
+      - name: Get wheel path.
+        run: |
+          WHEEL_PATH=$(python get_wheel_path.py dist)
+          echo "WHEEL_PATH=${WHEEL_PATH}" >> $GITHUB_ENV
+        working-directory: vkit-collect-usage-information
+      - name: Apply pywhlobf.
+        run: |
+          # New wheel version breaks.
+          python -m pip uninstall -y wheel
+          python -m pip install wheel==0.37.1
+          # https://github.com/cython/cython/issues/4371
+          python -m pip install pywhlobf[cython3]>=0.2.8
+          /opt/python/${{ matrix.python_abi }}/bin/pywhlobf \
+            ${{ env.WHEEL_PATH }} \
+            pywhlobf_dist \
+            --platform_tag=${{ matrix.platform_tag }}
+        working-directory: vkit-collect-usage-information
+      - name: Get pywhlobf wheel path.
+        run: |
+          PYWHLOBF_WHEEL_PATH=$(python get_wheel_path.py pywhlobf_dist)
+          echo "PYWHLOBF_WHEEL_PATH=${PYWHLOBF_WHEEL_PATH}" >> $GITHUB_ENV
+        working-directory: vkit-collect-usage-information
+      - name: Test wheel.
+        run: |
+          python -m pip uninstall -y vkit-collect-usage-information
+          python -m pip install ${{ env.PYWHLOBF_WHEEL_PATH }}
+          python -c 'import vkit_collect_usage_information'
+        env:
+          LOGGING_LEVEL: DEBUG
+          VKIT_COLLECT_USAGE_INFORMATION_MODE: github_release_test
+      - uses: actions/upload-artifact@v3
+        with:
+          name: wheel
+          path: ${{ env.PYWHLOBF_WHEEL_PATH }}
+  push_wheel_to_pypi:
+    needs: 
+      - build_dummy_wheel
+      - build_wheel_on_macos_and_windows
+      - build_wheel_on_linux
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: wheel
+      - name: Show all wheels.
+        run: |
+          ls -R
+      - name: Push to PyPI.
+        run: |
+          pip install twine
+          twine upload --skip-existing *
+        env:
+          TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          TWINE_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
