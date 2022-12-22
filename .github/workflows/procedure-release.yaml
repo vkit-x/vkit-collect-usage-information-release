@@ -98,7 +98,7 @@ jobs:
           python -m pip uninstall -y wheel
           python -m pip install wheel==0.37.1
           # https://github.com/cython/cython/issues/4371
-          python -m pip install pywhlobf[cython3]>=0.2.8
+          python -m pip install pywhlobf[cython3]>=22.1.0
           pywhlobf ${{ env.WHEEL_PATH }} pywhlobf_dist --platform_tag=${{ env.PLATFORM_TAG }}
         working-directory: vkit-collect-usage-information
       - name: Get pywhlobf wheel path. (macos)
@@ -188,7 +188,7 @@ jobs:
           python -m pip uninstall -y wheel
           python -m pip install wheel==0.37.1
           # https://github.com/cython/cython/issues/4371
-          python -m pip install pywhlobf[cython3]>=0.2.8
+          python -m pip install pywhlobf[cython3]>=22.1.0
           /opt/python/${{ matrix.python_abi }}/bin/pywhlobf \
             ${{ env.WHEEL_PATH }} \
             pywhlobf_dist \
