@@ -51,6 +51,7 @@ jobs:
           - "3.8"
           - "3.9"
           - "3.10"
+          - "3.11"
     name: Build wheel on ${{ matrix.os }} with Python ${{ matrix.python_version }}
     runs-on: ${{ matrix.os }}
     steps:
@@ -135,9 +136,12 @@ jobs:
           - "cp38-cp38"
           - "cp39-cp39"
           - "cp310-cp310"
+          - "cp311-cp311"
         exclude:
           - platform_tag: "manylinux2014_x86_64"
             python_abi: "cp310-cp310"
+          - platform_tag: "manylinux2014_x86_64"
+            python_abi: "cp311-cp311"
     container:
       image: quay.io/pypa/${{ matrix.platform_tag }}
     name: Build wheel on ${{ matrix.platform_tag }} with Python ${{ matrix.python_abi }}
